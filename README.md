@@ -40,7 +40,7 @@ The Y-ais and X-axis numbers are 7-bit two's complement numbers, representive re
 ## License
 Licensed Apache 2.0 - Copyright (c) 2026 Cristian Dinca.
 
-Includes code from [swiftlang/swift-embedded-examples](github.com/swiftlang/swift-embedded-examples) - CMake config - licensed Apache License v2.0 with Runtime Library Exception. Modifications were made to adapt this to our codebase. Copyright (c) 2023 Apple Inc. and the Swift project authors).
+Includes code from [swiftlang/swift-embedded-examples](github.com/swiftlang/swift-embedded-examples) - CMake config - licensed Apache License v2.0 with Runtime Library Exception. Modifications were made to adapt this to our codebase. Copyright (c) 2023 Apple Inc. and the Swift project authors.
 
 Includes code from TinyUSB (MIT Licensed) - Copyright (c) 2019 Ha Thach (tinyusb.org).
 
