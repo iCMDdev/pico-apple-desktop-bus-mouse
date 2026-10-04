@@ -1,3 +1,5 @@
+; Copyright (c) 2026 Cristian Dinca (icmd.tech)
+;
 ; Designed for this specific ADB mouse use, not full-ADB compliant.
 ; Specifically, max 4 data bytes can be received (one RX FIFO push only).
 ;
