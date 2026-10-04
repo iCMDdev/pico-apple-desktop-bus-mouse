@@ -1,0 +1,155 @@
+; Designed for this specific ADB mouse use, not full-ADB compliant.
+; Specifically, max 4 data bytes can be received (one RX FIFO push only).
+;
+; Response bits will be inverted; XOR before use.
+; IRQ 0 = Finished, IRQ 1 = SRQ (service request) - i.e. device says
+; data is available
+;
+; 5us per clock cycle (200kHz).
+; Non-optional (i.e. mandatory) side set was used, to allow
+; for larger delays to be included as arguments.
+;
+; Due to the way the hardware was wired, we're using
+; 2 pins: one for RX, and one for TX.
+;
+; Also, the electrical circuit makes GPIO levels to be inverted
+; relative to ADB: 1 = ADB LOW, 0 = ADB HIGH/released
+
+.program adb_txrx
+.side_set 1
+
+nextcmd:
+    irq 0               side 0      ; tell the C / main core that we're ready!
+    
+    ; pull data from input FIFO
+    pull block          side 0      ; blocking (wait for data)
+    ; we get:
+    ;    - 8 data bits
+    ;    - 8 bits indicating how many DATA bits we're set to receive (if any).
+    ;        note: the value sent to pio should be 8*DESIRED_BYTE_COUNT-1.
+    ;    - rest bits currently 0
+    set y, 7            side 0      ; counter for 8 bits to be sent (the 9th not an actual command bit)
+
+    ; init
+    ; Attention: pull down to 0 for 800us
+    set x, 8            side 1 [15] 
+attention:
+    jmp x-- attention   side 1 [15]
+sync:
+    nop                 side 0 [12] ; Sync: pull HIGH for 70us
+
+loop:
+    ; 35us LOW
+    out x, 1            side 1 [5]  ; get 1 bit from OSR
+    jmp !x emit_zero    side 1
+
+emit_one:
+    ; 65us HIGH (60 here, 5 in emit_finish)
+    jmp emit_finish     side 0 [11]
+
+emit_zero:
+    ; 30 more us LOW (total 65us)
+    nop                 side 1 [5]
+    ; then, 35us HIGH (30 here, 5 in emit_finish)
+    nop                 side 0 [5]          
+
+emit_finish:
+    jmp y-- loop        side 0
+
+end:
+    ; Command stop: 70us LOW
+    out y, 8            side 1 [13] ; also load RX bit_count-1
+
+    ; Release bus for 35us.
+    ; If SRQ is happening, another device will keep it LOW.
+    nop                 side 0 [6]
+
+    ; RX is inverted: pin=1 means actual ADB LOW.
+    jmp pin, srq        side 0
+
+    ; No SRQ. If no DATA packet expected, we're done.
+    jmp !y nextcmd         side 0
+
+    ; Otherwise wait for normal response, if we expect data.
+    ; We wait till device pulls down the wire.
+    set x, 21                   side 0
+wait_response:
+    jmp pin, got_response       side 0
+    jmp x-- wait_response       side 0
+    jmp nextcmd                 side 0  ; timeout / no response
+
+srq:
+    wait 0 pin 0                side 0
+    irq 1                       side 0
+    jmp nextcmd                 side 0
+
+got_response:
+    ; at most 10us late - not an issue, but we calibrate this here
+    ; (this also reads the start bit '1')
+    wait 0 pin 0        side 0
+    wait 1 pin 0        side 0
+
+    ; read data bits
+rxloop:
+    ; wait for 50us before deciding what bit this is
+    nop                 side 0 [8]  
+    in pins, 1          side 0 ; read bit
+    ; sync on every bit
+    wait 0 pin 0        side 0
+    wait 1 pin 0        side 0
+    jmp y-- rxloop      side 0
+
+donerx:
+    ; On the final iteration, the falling edge we just caught
+    ; was the stop bit, not another data bit.
+    wait 0 pin 0        side 0  ; wait for stop bit to release
+    push block          side 0
+
+.wrap
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+static inline void adb_txrx_program_init(
+    PIO pio,
+    uint sm,
+    uint offset,
+    uint tx_pin,
+    uint rx_pin
+) {
+    pio_sm_config c = adb_txrx_program_get_default_config(offset);
+
+    // TX is controlled by side-set.
+    sm_config_set_sideset_pins(&c, tx_pin);
+
+    // RX is used by `in pins, 1` and `wait ... pin 0`.
+    sm_config_set_in_pins(&c, rx_pin);
+
+    // RX is also used by `jmp pin, ...`.
+    sm_config_set_jmp_pin(&c, rx_pin);
+
+    // Command byte comes out MSB-first.
+    sm_config_set_out_shift(&c, false, false, 32);
+
+    // Received bits are accumulated MSB-first. No autopush.
+    sm_config_set_in_shift(&c, false, false, 32);
+
+    // 5 us per PIO instruction = 200 kHz.
+    sm_config_set_clkdiv(
+        &c,
+        (float)clock_get_hz(clk_sys) / 200000.0f
+    );
+
+    // Connect GPIOs to this PIO.
+    pio_gpio_init(pio, tx_pin);
+    pio_gpio_init(pio, rx_pin);
+    gpio_pull_up(rx_pin);
+
+    // Set pin directions (TX out, RX in)
+    pio_sm_set_consecutive_pindirs(pio, sm, tx_pin, 1, true);
+    pio_sm_set_consecutive_pindirs(pio, sm, rx_pin, 1, false);
+
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}
